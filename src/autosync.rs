@@ -65,9 +65,15 @@ pub fn start_polling(
         // Check if save file path resolves
         match sync::current_run_save_path(&folder_path) {
             Some(p) => eprintln!("[active-run] Save file found at: {}", p.display()),
-            None => eprintln!(
-                "[active-run] WARNING: No current_run.save found relative to {folder_path}"
-            ),
+            None => {
+                let expected = std::path::Path::new(&folder_path)
+                    .parent()
+                    .map(|p| p.join("current_run.save").display().to_string())
+                    .unwrap_or_else(|| format!("<parent of {folder_path}>/current_run.save"));
+                eprintln!(
+                    "[active-run] No {expected} yet — it appears while a run is in progress"
+                );
+            }
         }
 
         loop {

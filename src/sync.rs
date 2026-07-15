@@ -268,10 +268,22 @@ pub fn sync_active_run(
         .map_err(|e| format!("Failed to read current_run.save: {e}"))?;
 
     // Validate it's valid JSON with expected fields
-    let json: serde_json::Value = serde_json::from_str(&content)
+    let mut json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Invalid JSON in current_run.save: {e}"))?;
 
-    if json.get("players").is_none() || json.get("map_point_history").is_none() {
+    // map_point_history was renamed to visited_map_coords in newer saves,
+    // but the tracker server still validates on the old name — send both.
+    let mut content = content;
+    if json.get("map_point_history").is_none() {
+        if let Some(coords) = json.get("visited_map_coords").cloned() {
+            json["map_point_history"] = coords;
+            content = serde_json::to_string(&json)
+                .map_err(|e| format!("Failed to serialize save data: {e}"))?;
+        }
+    }
+
+    let has_map = json.get("map_point_history").is_some();
+    if json.get("players").is_none() || !has_map {
         return Ok(false); // Not a valid save file (maybe empty/corrupt)
     }
 
