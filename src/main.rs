@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod autosync;
@@ -12,20 +12,20 @@ mod tray;
 fn main() -> eframe::Result {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
 
-    // Load config once — used for visibility check and registry update
+    // Load config once — used for visibility check and autostart refresh
     let loaded_config = config::Config::load();
     let has_config = loaded_config.is_some();
     let start_visible = !start_minimized || !has_config;
 
-    // Update registry path if start_with_windows is enabled
+    // Keep the autostart entry pointing at the current exe path
     if let Some(cfg) = &loaded_config {
         if cfg.start_with_windows {
-            startup::update_registry_path_if_needed();
+            startup::refresh_autostart_if_needed();
         }
     }
     drop(loaded_config);
 
-    // Create tray icon before the event loop (required by tray-icon on Windows).
+    // Create tray icon before the event loop.
     // tray_handle must stay alive (not dropped) for the icon to remain visible.
     let tray_handle = tray::create_tray().expect("Failed to create tray icon");
 

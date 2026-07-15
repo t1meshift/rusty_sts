@@ -1,10 +1,9 @@
 use crate::autosync;
 use crate::config::{Config, API_URL};
 use crate::detect;
-use crate::notification;
 use crate::startup;
 use crate::sync::{self, SyncProgress, SyncResult};
-use crate::tray::{TrayHandle, TrayMenuIds};
+use crate::tray::{self, TrayHandle, TrayMenuIds};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use tray_icon::menu::MenuId;
@@ -34,8 +33,8 @@ pub struct StsApp {
     progress_rx: Option<mpsc::Receiver<SyncProgress>>,
     result_rx: Option<mpsc::Receiver<SyncResult>>,
     current_progress: Option<SyncProgress>,
-    // Tray — _tray_icon must stay alive for the icon to remain visible
-    _tray_icon: tray_icon::TrayIcon,
+    // Tray — must stay alive for the icon to remain visible
+    _tray: tray::PlatformTray,
     tray_menu_ids: TrayMenuIds,
     tray_menu_rx: mpsc::Receiver<MenuId>,
     window_visible: bool,
@@ -44,12 +43,13 @@ pub struct StsApp {
     auto_sync_enabled: Arc<AtomicBool>,
     autosync_started: bool,
     minimized_on_start: bool,
-    egui_ctx: egui::Context,
+    _egui_ctx: egui::Context,
 }
 
 impl StsApp {
     pub fn new(tray_handle: TrayHandle, start_visible: bool, egui_ctx: egui::Context) -> Self {
-        let _tray_icon = tray_handle._icon;
+        tray::set_egui_ctx(egui_ctx.clone());
+        let _tray = tray_handle._platform;
         let tray_menu_ids = tray_handle.ids;
         let tray_menu_rx = tray_handle.menu_rx;
         let _tray_click_rx = tray_handle.click_rx;
@@ -97,7 +97,7 @@ impl StsApp {
                     progress_rx: None,
                     result_rx: None,
                     current_progress: None,
-                    _tray_icon,
+                    _tray,
                     tray_menu_ids,
                     tray_menu_rx,
                     window_visible: start_visible,
@@ -105,7 +105,7 @@ impl StsApp {
                     auto_sync_enabled,
                     autosync_started: true,
                     minimized_on_start: false,
-                    egui_ctx,
+                    _egui_ctx: egui_ctx.clone(),
                 }
             }
             None => {
@@ -124,7 +124,7 @@ impl StsApp {
                     progress_rx: None,
                     result_rx: None,
                     current_progress: None,
-                    _tray_icon,
+                    _tray,
                     tray_menu_ids,
                     tray_menu_rx,
                     window_visible: start_visible,
@@ -132,7 +132,7 @@ impl StsApp {
                     auto_sync_enabled,
                     autosync_started: false,
                     minimized_on_start: false,
-                    egui_ctx,
+                    _egui_ctx: egui_ctx.clone(),
                 }
             }
         }
@@ -195,7 +195,7 @@ impl StsApp {
     }
 
     fn handle_tray_events(&mut self) {
-        // Open and Quit are handled directly in tray.rs callbacks via Win32 API.
+        // Open and Quit are handled directly in tray.rs callbacks.
         // Only Sync Now comes through the channel.
         while let Ok(id) = self.tray_menu_rx.try_recv() {
             if id == self.tray_menu_ids.sync_now {
@@ -209,10 +209,9 @@ impl StsApp {
 
     fn handle_close_requested(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) {
-            // Hide to tray instead of exiting — use Win32 API to fully
-            // remove from taskbar (Visible(false) kills eframe's event loop).
+            // Hide to tray instead of exiting
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            crate::tray::hide_window_win32();
+            tray::hide_window();
             self.window_visible = false;
         }
     }
@@ -328,13 +327,18 @@ impl StsApp {
         }
 
         let prev_start = self.start_with_windows;
-        ui.checkbox(&mut self.start_with_windows, "Start with Windows");
+        let autostart_label = if cfg!(windows) {
+            "Start with Windows"
+        } else {
+            "Start at login"
+        };
+        ui.checkbox(&mut self.start_with_windows, autostart_label);
         if self.start_with_windows != prev_start {
             let _ = self.save_config();
             if self.start_with_windows {
-                let _ = startup::enable_start_with_windows();
+                let _ = startup::enable_autostart();
             } else {
-                let _ = startup::disable_start_with_windows();
+                let _ = startup::disable_autostart();
             }
         }
 
@@ -419,7 +423,12 @@ impl eframe::App for StsApp {
 
         // Minimize on first frame if starting minimized
         if !self.window_visible && !self.minimized_on_start {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            if cfg!(windows) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                // Hide to tray — Linux has no Win32-style hidden-minimize
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             self.minimized_on_start = true;
         }
 

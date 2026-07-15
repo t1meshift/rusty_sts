@@ -25,19 +25,38 @@ pub fn detect_save_folders() -> Vec<PathBuf> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // On macOS/Linux, check common Steam paths
+        // On macOS/Linux, check common save locations.
+        // The Proton wine prefix (app id 2868840) covers anyone running the
+        // Windows build of the game through Steam Play.
+        const PROTON_SUFFIX: &str = "steamapps/compatdata/2868840/pfx/drive_c/users/steamuser/AppData/Roaming/SlayTheSpire2/steam";
+        let mut candidates = Vec::new();
+        // Native Linux build: ~/.local/share/SlayTheSpire2/steam/<steam_id>/
+        if let Some(data) = dirs::data_dir() {
+            candidates.push(data.join("SlayTheSpire2").join("steam"));
+        }
         if let Some(home) = dirs::home_dir() {
-            let candidates = vec![
-                home.join(".local/share/Steam/steamapps/compatdata/2868840/pfx/drive_c/users/steamuser/AppData/Roaming/SlayTheSpire2/steam"),
+            candidates.extend([
+                home.join(".local/share/Steam").join(PROTON_SUFFIX),
+                home.join(".steam/steam").join(PROTON_SUFFIX),
+                home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam")
+                    .join(PROTON_SUFFIX),
+                home.join("snap/steam/common/.local/share/Steam")
+                    .join(PROTON_SUFFIX),
                 home.join("Library/Application Support/SlayTheSpire2/steam"),
-            ];
-            for base in candidates {
-                if base.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(&base) {
-                        for entry in entries.flatten() {
-                            let history =
-                                entry.path().join("profile1").join("saves").join("history");
-                            if history.is_dir() {
+            ]);
+        }
+        // Some candidates are symlinks to the same Steam library —
+        // dedupe by canonical path.
+        let mut seen = HashSet::new();
+        for base in candidates {
+            if base.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&base) {
+                    for entry in entries.flatten() {
+                        let history = entry.path().join("profile1").join("saves").join("history");
+                        if history.is_dir() {
+                            let canonical =
+                                history.canonicalize().unwrap_or_else(|_| history.clone());
+                            if seen.insert(canonical) {
                                 results.push(history);
                             }
                         }

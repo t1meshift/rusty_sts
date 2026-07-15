@@ -11,11 +11,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 rfd = "0.15"
-tray-icon = "0.19"
+# default-features off: skips libxdo (menu accelerators, unused here) so
+# Linux builds don't need xdotool; common-controls-v6 is Windows-only styling
+tray-icon = { version = "0.19", default-features = false, features = ["common-controls-v6"] }
+image = "0.25"
+
+[target.'cfg(windows)'.dependencies]
 winrt-notification = "0.5"
 winreg = "0.56"
-image = "0.25"
 windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
-[build-dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+notify-rust = "4"
+
+[target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
