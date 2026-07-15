@@ -6,6 +6,30 @@ use std::time::SystemTime;
 
 const BATCH_SIZE: usize = 10;
 
+/// reqwest's top-level Display is vague ("error sending request for url");
+/// the actual cause (DNS, TLS, connection refused, timeout) is in the
+/// source chain — include it.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut msg = e.to_string();
+    let mut source = e.source();
+    while let Some(src) = source {
+        msg.push_str(": ");
+        msg.push_str(&src.to_string());
+        source = src.source();
+    }
+    msg
+}
+
+/// Keep response bodies in logs readable — they can be large HTML error pages.
+fn truncate_for_log(body: &str) -> &str {
+    let end = body
+        .char_indices()
+        .nth(2000)
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    &body[..end]
+}
+
 #[derive(Debug, Clone)]
 pub struct SyncProgress {
     pub current: usize,
@@ -137,6 +161,13 @@ pub fn run_sync(
         {
             Ok(response) => {
                 let status = response.status();
+                let body_text = response.text().unwrap_or_default();
+                if !status.is_success() {
+                    eprintln!(
+                        "[sync] POST {sync_url} -> {status}: {}",
+                        truncate_for_log(&body_text)
+                    );
+                }
                 if status.is_success() {
                     // Track filenames from this batch as synced
                     let batch_filenames: Vec<String> = batch
@@ -148,7 +179,7 @@ pub fn run_sync(
                                 .to_string()
                         })
                         .collect();
-                    match response.json::<SyncResponse>() {
+                    match serde_json::from_str::<SyncResponse>(&body_text) {
                         Ok(resp) => {
                             result.imported += resp.imported;
                             result.skipped += resp.skipped;
@@ -169,14 +200,15 @@ pub fn run_sync(
                         .errors
                         .push("Batch too large (413 Payload Too Large)".to_string());
                 } else {
-                    let body = response.text().unwrap_or_default();
                     result
                         .errors
-                        .push(format!("Server error ({status}): {body}"));
+                        .push(format!("Server error ({status}): {body_text}"));
                 }
             }
             Err(e) => {
-                result.errors.push(format!("Network error: {e}"));
+                let msg = format!("Network error: {}", error_chain(&e));
+                eprintln!("[sync] POST {sync_url} failed: {msg}");
+                result.errors.push(msg);
                 break;
             }
         }
@@ -252,13 +284,17 @@ pub fn sync_active_run(
         .header("Content-Type", "application/json")
         .body(content)
         .send()
-        .map_err(|e| format!("Network error syncing active run: {e}"))?;
+        .map_err(|e| format!("Network error syncing active run: {}", error_chain(&e)))?;
 
-    if response.status().is_success() {
+    // Failures propagate as Err — the caller logs them.
+    let status = response.status();
+    if status.is_success() {
         Ok(true)
     } else {
-        let status = response.status();
         let body = response.text().unwrap_or_default();
-        Err(format!("Failed to sync active run ({status}): {body}"))
+        Err(format!(
+            "Failed to sync active run ({status}): {}",
+            truncate_for_log(&body)
+        ))
     }
 }
